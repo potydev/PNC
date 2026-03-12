@@ -1,0 +1,21 @@
+# Environment - contains real secrets, NEVER commit
+.env
+
+# Compiled binary
+sso
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Coverage output
+*.out
+
+# Dependency vendor directory (optional, uncomment if vendoring)
+# vendor/

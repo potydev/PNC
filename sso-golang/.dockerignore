@@ -1,0 +1,8 @@
+.git
+.gitignore
+README.md
+sso
+*.log
+node_modules
+vendor
+.env

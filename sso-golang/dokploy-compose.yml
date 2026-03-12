@@ -1,0 +1,11 @@
+services:
+  sso-golang:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sso-golang
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    env_file:
+      - .env
