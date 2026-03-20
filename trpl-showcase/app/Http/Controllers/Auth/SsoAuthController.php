@@ -11,8 +11,32 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
+/**
+ * SsoAuthController
+ * 
+ * Handles OAuth 2.0 Authorization Code Flow integration with central SSO service.
+ * Manages OAuth flow redirects, token exchange, user profile fetching, and logout.
+ * 
+ * SSO Flow:
+ * 1. redirect() - Initiates OAuth flow, generates state parameter
+ * 2. callback() - Handles OAuth callback, exchanges code for JWT token
+ * 3. logout() - Clears session and invalidates SSO session
+ * 
+ * @category Controller
+ * @package App\Http\Controllers\Auth
+ */
 class SsoAuthController extends Controller
 {
+    /**
+     * Initiate SSO OAuth Authorization Code Flow
+     * 
+     * Generates a state parameter to prevent CSRF attacks and redirects user
+     * to SSO service authorization endpoint. State is stored in session for
+     * validation during callback.
+     * 
+     * @param Request $request HTTP request object with session
+     * @return RedirectResponse Redirect to SSO authorize endpoint
+     */
     public function redirect(Request $request): RedirectResponse
     {
         $state = Str::random(40);
@@ -27,6 +51,19 @@ class SsoAuthController extends Controller
         return redirect()->away(rtrim(config('sso.base_url'), '/').'/authorize?'.$query);
     }
 
+    /**
+     * Handle SSO OAuth Callback
+     * 
+     * Processes OAuth callback from SSO service:
+     * - Validates state parameter against CSRF attack
+     * - Exchanges authorization code for JWT access token
+     * - Fetches user profile from SSO userinfo endpoint
+     * - Creates or updates local user record
+     * - Establishes authenticated session
+     * 
+     * @param Request $request HTTP request with code, state, and session
+     * @return RedirectResponse Redirect to showcase or error route
+     */
     public function callback(Request $request): RedirectResponse
     {
         if (! $request->filled('code') || ! $request->filled('state')) {
@@ -90,6 +127,17 @@ class SsoAuthController extends Controller
         return redirect()->route('showcase.index');
     }
 
+    /**
+     * Global SSO Logout
+     * 
+     * Performs complete logout procedure:
+     * - Invalidates local session
+     * - Redirects to SSO logout endpoint to clear SSO session
+     * - SSO service redirects back to showcase login
+     * 
+     * @param Request $request HTTP request with authentication data
+     * @return RedirectResponse Redirect to SSO logout endpoint
+     */
     public function logout(Request $request): RedirectResponse
     {
         Auth::logout();
