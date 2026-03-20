@@ -19,7 +19,11 @@ use Spatie\Permission\Contracts\Role;
 class DashboardController extends Controller
 {
     /**
-     * Display a listing of the resource.
+    * Tampilkan dashboard utama berdasarkan role user yang login.
+    *
+    * - Menghitung ringkasan data user, dosen, mahasiswa
+    * - Mengolah statistik absensi per status untuk chart
+    * - Menyediakan data jadwal untuk mahasiswa
      */
     public function index(Request $request)
     {
@@ -28,6 +32,7 @@ class DashboardController extends Controller
         $lecturer = Lecturer::count();
         $student = Student::count();
 
+        // Filter opsional berdasarkan periode (format YYYY-MM)
         $periode = $request->input('periode');
     
         $availablePeriods = AttendanceListStudent::selectRaw("DATE_FORMAT(created_at, '%Y-%m') as period")
@@ -38,6 +43,7 @@ class DashboardController extends Controller
 
        
             
+        // Query dasar data absensi; akan difilter jika periode dipilih
         $query = AttendanceListStudent::query();
         if ($periode) {
             $query->whereRaw("DATE_FORMAT(created_at, '%Y-%m') = ?", [$periode]);
@@ -46,6 +52,7 @@ class DashboardController extends Controller
         $attendanceData = $query->get();
 
         
+        // Inisialisasi semua status absensi untuk memastikan chart selalu konsisten
         $defaultCounts = [
             1 => 0, 
             2 => 0, 
@@ -60,6 +67,7 @@ class DashboardController extends Controller
                 $defaultCounts[$status]++;
             }
         }
+        // Jadwal hanya relevan untuk role mahasiswa
         $jadwal = null;
         if($auth->hasRole('mahasiswa')){
 
@@ -71,6 +79,7 @@ class DashboardController extends Controller
 
         $prodis = StudyProgram::get();
 
+        // Notifikasi awal login untuk dosen terkait password default
         $messagepass = null;
         $alertType = null;
 
@@ -101,6 +110,9 @@ class DashboardController extends Controller
         ]);
     }
 
+    /**
+     * Tampilkan dashboard mahasiswa dan total akumulasi ketidakhadiran.
+     */
     public function index_mahasiswa($studentId)
     {
         $auth = Auth::user();
@@ -111,6 +123,7 @@ class DashboardController extends Controller
 
          
 
+        // Hitung total jam ketidakhadiran dengan status tertentu
         $totalJam = 0;
 
         // dd($attendances->pluck('attendanceListDetail'));

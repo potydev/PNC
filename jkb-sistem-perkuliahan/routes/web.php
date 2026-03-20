@@ -32,22 +32,21 @@ use App\Models\StudyProgram;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
-// Route::get('/', function () {
-//     return view('welcome');
-// });
+// Endpoint awal aplikasi: halaman login.
 Route::get('/', [AuthenticatedSessionController::class, 'create'])->name('login');
 // Route::get('/dashboard', [DashboardController::class, 'index'])->name('login');
 
 
 
 Route::middleware('auth')->group(function () {
-    // Route::resource('dashboard', DashboardController::class);
+    // Area umum setelah login.
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard.index');
     Route::get('/m/dashboard/{studentId}', [DashboardController::class, 'index_mahasiswa'])->name('m.dashboard');
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     // Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
+    // Modul dokumen perkuliahan (akses super_admin dan dosen).
     Route::prefix('dokumen-perkuliahan')->name('dokumen_perkuliahan.')->middleware(['role:super_admin|dosen'])->group(function(){
      Route::get('/kelola/index', [A_Lecturer_DocumentController::class,'index'])->name('kelola.index');
      Route::get('/kelola/create', [A_Lecturer_DocumentController::class, 'create'])->name('kelola.create');
@@ -63,6 +62,7 @@ Route::middleware('auth')->group(function () {
 
 
     });
+    // Modul master data (khusus super_admin).
     Route::prefix('masterdata')->name('masterdata.')->middleware(['role:super_admin'])->group(function(){
         Route::resource('users', UserController::class);
         Route::resource('periode', PeriodeController::class);
@@ -121,7 +121,7 @@ Route::middleware('auth')->group(function () {
     Route::post('jadwal/update/{id}', [JadwalController::class, 'update'])->name('jadwal.update');
    
 
-    //dosen->daftar matkul->daftar kelas->jurnal dan absensi
+    // Alur dosen: dokumen perkuliahan, absensi, dan verifikasi.
     Route::prefix('d')->name('d.')->middleware(['role:dosen'])->group(function(){
         Route::get('/dokumen-perkuliahan/{nidn}', [L_LecturerDocumentController::class, 'index'])->name('dokumen_perkuliahan');
         Route::get('/daftar-dokumen-perkuliahan/{nidn}', [L_LecturerDocumentController::class, 'index2'])->name('daftar_dokumen_perkuliahan');
@@ -152,6 +152,7 @@ Route::middleware('auth')->group(function () {
         
        
     });
+    // Alur mahasiswa: lihat dokumen, riwayat absensi, dan verifikasi.
     Route::prefix('m')->name('m.')->middleware(['role:mahasiswa'])->group(function(){
         Route::get('/dokumen-perkuliahan/{id}', [M_LecturerDocumentController::class, 'index'])->name('dokumen_perkuliahan');
         Route::get('/riwayat-absensi/{nim}', [M_LecturerDocumentController::class, 'riwayat_absensi'])->name('riwayat_absensi');

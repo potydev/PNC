@@ -16,6 +16,12 @@ use Spatie\Permission\Models\Role;
 
 class SsoAuthController extends Controller
 {
+    /**
+     * Redirect user ke endpoint authorize SSO.
+     *
+     * Proses ini membuat `state` acak lalu menyimpannya di session
+     * untuk validasi anti-CSRF saat callback dari SSO.
+     */
     public function redirect(Request $request): RedirectResponse
     {
         $state = Str::random(40);
@@ -30,12 +36,24 @@ class SsoAuthController extends Controller
         return redirect()->away(rtrim(config('sso.base_url'), '/').'/authorize?'.$query);
     }
 
+    /**
+     * Tangani callback dari SSO setelah user berhasil autentikasi.
+     *
+     * Ringkasan alur:
+     * 1) Validasi `code` dan `state`
+     * 2) Tukar `code` menjadi access token
+     * 3) Ambil profil user dari endpoint userinfo
+     * 4) Sinkronkan user lokal + role
+     * 5) Login ke aplikasi dan redirect sesuai role
+     */
     public function callback(Request $request): RedirectResponse
     {
+        // Wajib ada code & state dari SSO
         if (! $request->filled('code') || ! $request->filled('state')) {
             return redirect()->route('login')->withErrors(['sso' => 'SSO callback tidak valid.']);
         }
 
+        // Validasi state terhadap session untuk mencegah CSRF
         if ($request->session()->pull('sso_state') !== $request->string('state')->toString()) {
             return redirect()->route('login')->withErrors(['sso' => 'State SSO tidak cocok.']);
         }
@@ -55,6 +73,7 @@ class SsoAuthController extends Controller
             return redirect()->route('login')->withErrors(['sso' => 'Gagal menukar code SSO ke token.']);
         }
 
+        // Ambil token akses untuk request userinfo
         $accessToken = $tokenResponse->json('access_token');
         if (! is_string($accessToken) || $accessToken === '') {
             return redirect()->route('login')->withErrors(['sso' => 'Token SSO tidak valid.']);
@@ -69,6 +88,7 @@ class SsoAuthController extends Controller
             return redirect()->route('login')->withErrors(['sso' => 'Gagal mengambil profil user SSO.']);
         }
 
+        // Parsing data profil dari SSO
         $profile  = $userInfoResponse->json();
         $email    = data_get($profile, 'email');
 
@@ -93,7 +113,7 @@ class SsoAuthController extends Controller
             $user->update(['name' => $name]);
         }
 
-        // --- Assign role jika belum punya ---
+        // Assign role dari SSO hanya jika user lokal belum memiliki role
         if (is_string($roleName) && $roleName !== '' && method_exists($user, 'assignRole')) {
             $roleExists = Role::where('name', $roleName)->exists();
             if ($roleExists && $user->roles()->count() === 0) {
@@ -101,7 +121,7 @@ class SsoAuthController extends Controller
             }
         }
 
-        // --- Tolak login jika tidak punya role ---
+        // User tanpa role tidak diizinkan masuk ke aplikasi
         $user->refresh();
         if ($user->roles()->count() === 0) {
             return redirect()->route('login')->withErrors([
@@ -109,6 +129,7 @@ class SsoAuthController extends Controller
             ]);
         }
 
+        // Buat sesi login aplikasi lokal (Laravel session)
         Auth::login($user, true);
         $request->session()->regenerate();
 
@@ -121,10 +142,12 @@ class SsoAuthController extends Controller
      */
     private function redirectByRole(User $user): RedirectResponse
     {
+        // Super admin masuk ke dashboard utama
         if ($user->hasRole('super_admin')) {
             return redirect()->route('dashboard.index');
         }
 
+        // Dosen diarahkan ke halaman dokumen perkuliahan berdasarkan NIDN
         if ($user->hasRole('dosen')) {
             $lecturer = Lecturer::where('user_id', $user->id)->first();
             if ($lecturer) {
@@ -133,6 +156,7 @@ class SsoAuthController extends Controller
             return redirect()->route('dashboard.index');
         }
 
+        // Mahasiswa diarahkan ke halaman dokumen perkuliahan berdasarkan id student
         if ($user->hasRole('mahasiswa')) {
             $student = Student::where('user_id', $user->id)->first();
             if ($student) {

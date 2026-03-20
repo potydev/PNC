@@ -26,31 +26,42 @@ class AttendanceList extends Model
         'periode_id',
     ];
 
-    //has finished, jika 0 = aktif, 1 = dokumen selesai, 2 acc kajur
+    // Status penyelesaian dokumen: 0 = aktif, 1 = selesai, 2 = acc kajur.
 
+    // Relasi ke dosen kajur yang melakukan approval.
     public function kajur()
     {
         return $this->belongsTo(Lecturer::class, 'lecturer_kajur_id', 'id');
     }
+
+    // Relasi ke kelas mahasiswa.
     public function student_class(){
         return $this->belongsTo(StudentClass::class, 'student_class_id', 'id');
     }
+
+    // Relasi ke dosen pengampu.
     public function lecturer(){
         return $this->belongsTo(Lecturer::class, 'lecturer_id', 'id');
     }
+
+    // Relasi ke periode akademik.
     public function periode(){
         return $this->belongsTo(Periode::class, 'periode_id', 'id');
     }
+
+    // Relasi ke mata kuliah.
     public function course(){
         return $this->belongsTo(Courses::class, 'course_id', 'id');
     }
 
-    public function attendanceListDetails(){ //attendence list details
+    // Daftar detail kehadiran per pertemuan.
+    public function attendanceListDetails(){
         return $this->hasMany(AttendanceListDetail::class, 'attendance_list_id','id');
     }
 
+   // Relasi jurnal perkuliahan untuk dokumen ini.
    public function journal()
-{
-    return $this->hasOne(Journal::class, 'attendance_list_id');
-}
+   {
+       return $this->hasOne(Journal::class, 'attendance_list_id');
+   }
 }

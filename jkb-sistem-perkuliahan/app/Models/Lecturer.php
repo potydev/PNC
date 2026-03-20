@@ -21,16 +21,18 @@ class Lecturer extends Model
         'position_id',
     ];
 
-
+    // Akun login yang terhubung ke data dosen.
     public function user(){
         return $this->belongsTo(User::class);
     }
 
+    // Relasi pivot dosen-mata kuliah.
     public function courseLecturers()
     {
         return $this->hasMany(CourseLecturer::class, 'lecturer_id');
     }
 
+    // Daftar mata kuliah yang diampu dosen (many-to-many).
     public function courses()
     {
         return $this->belongsToMany(Courses::class, 'course_lecturers', 'lecturer_id', 'course_id')
@@ -39,12 +41,13 @@ class Lecturer extends Model
                     ->wherePivotNull('deleted_at');
     }
 
+    // Alias relasi many-to-many mata kuliah (tetap dipertahankan untuk kompatibilitas kode lama).
     public function course(){
-        //pivot table (many to many)
         return $this->belongsToMany(Courses::class, 'course_lecturers','lecturer_id', 'course_id')->wherePivotNull('deleted_at')
         ->withPivot('id');
     }
     
+    // Jabatan struktural dosen.
     public function position()
     {
         return $this ->belongsTo(Position::class, 'position_id', 'id');

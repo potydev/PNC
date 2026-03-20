@@ -1,0 +1,1 @@
+20 - 03 - 2026 : menambahkan komen ke semua code yang belum ada

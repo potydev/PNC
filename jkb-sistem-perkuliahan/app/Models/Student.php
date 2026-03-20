@@ -20,14 +20,17 @@ class Student extends Model
         'signature',
     ];
 
+    // Akun login yang terhubung ke data mahasiswa.
     public function user(){
         return $this->belongsTo(User::class);
     } 
 
+    // Kelas aktif mahasiswa.
     public function student_class(){
         return $this->belongsTo(StudentClass::class,'student_class_id','id');
     }
 
+    // Riwayat absensi mahasiswa di seluruh dokumen.
     public function attendence_list_student(){
         return $this->hasMany(AttendanceListStudent::class, 'student_id');
 
