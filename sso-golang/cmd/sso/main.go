@@ -34,6 +34,7 @@ type app struct {
 	googleHostedDomain string
 }
 
+// claims dipakai untuk session JWT internal dan access token OAuth.
 type claims struct {
 	UserID int64  `json:"uid"`
 	Email  string `json:"email"`
@@ -72,6 +73,7 @@ type googleUserInfo struct {
 	Name          string `json:"name"`
 }
 
+// Template HTML login sederhana untuk alur auth code.
 const loginTemplate = `<!doctype html>
 <html>
 <head>
@@ -115,6 +117,8 @@ const loginTemplate = `<!doctype html>
 </body>
 </html>`
 
+// main menginisialisasi dependency aplikasi, mendaftarkan route,
+// lalu menjalankan HTTP server SSO.
 func main() {
 	_ = loadDotEnv(".env")
 
@@ -166,6 +170,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	// Endpoint utama SSO/OAuth.
 	mux.HandleFunc("/health", a.health)
 	mux.HandleFunc("/authorize", a.authorize)
 	mux.HandleFunc("/login", a.login)
@@ -181,11 +186,15 @@ func main() {
 	}
 }
 
+// health dipakai untuk pengecekan status service.
 func (a *app) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// authorize menjalankan OAuth authorization endpoint.
+// Jika user belum login, user dialihkan ke /login.
+// Jika user sudah login, service menerbitkan authorization code lalu redirect kembali ke client.
 func (a *app) authorize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -200,6 +209,7 @@ func (a *app) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validasi client OAuth dan redirect URI yang diizinkan.
 	client, err := a.findClient(r.Context(), clientID)
 	if err != nil {
 		http.Error(w, "unknown client", http.StatusUnauthorized)
@@ -210,6 +220,7 @@ func (a *app) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cek sesi user pada cookie JWT internal.
 	user, err := a.currentUser(r)
 	if err != nil {
 		q := url.Values{}
@@ -220,6 +231,7 @@ func (a *app) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Terbitkan auth code sekali pakai.
 	code, err := randomToken(48)
 	if err != nil {
 		http.Error(w, "unable to generate auth code", http.StatusInternalServerError)
@@ -236,6 +248,7 @@ func (a *app) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sisipkan code dan state ke URL callback client.
 	redir, err := url.Parse(redirectURI)
 	if err != nil {
 		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
@@ -261,6 +274,7 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// renderLogin merender halaman login dengan konteks client OAuth.
 func (a *app) renderLogin(w http.ResponseWriter, r *http.Request, errMsg string) {
 	clientID := r.URL.Query().Get("client_id")
 	redirectURI := r.URL.Query().Get("redirect_uri")
@@ -289,6 +303,7 @@ func (a *app) loginGoogle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fitur Google OAuth bersifat opsional; pastikan sudah dikonfigurasi.
 	if a.googleOAuthConfig == nil || a.googleOAuthConfig.ClientID == "" || a.googleOAuthConfig.ClientSecret == "" {
 		http.Error(w, "google oauth belum dikonfigurasi", http.StatusInternalServerError)
 		return
@@ -298,6 +313,8 @@ func (a *app) loginGoogle(w http.ResponseWriter, r *http.Request) {
 	redirectURI := strings.TrimSpace(r.URL.Query().Get("redirect_uri"))
 	appState := strings.TrimSpace(r.URL.Query().Get("state"))
 
+	// Jika login Google dipicu dari flow OAuth app tertentu,
+	// pastikan pasangan client_id & redirect_uri valid.
 	if clientID != "" || redirectURI != "" {
 		if clientID == "" || redirectURI == "" {
 			http.Error(w, "client_id dan redirect_uri wajib berpasangan", http.StatusBadRequest)
@@ -315,12 +332,15 @@ func (a *app) loginGoogle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// State khusus Google OAuth untuk mencegah CSRF.
 	oauthState, err := randomToken(32)
 	if err != nil {
 		http.Error(w, "unable to prepare oauth state", http.StatusInternalServerError)
 		return
 	}
 
+	// Simpan context flow ke cookie JWT agar callback Google bisa melanjutkan
+	// ke flow authorize milik aplikasi asal.
 	flowToken, err := a.makeOAuthFlowToken(clientID, redirectURI, appState, oauthState)
 	if err != nil {
 		http.Error(w, "unable to sign oauth state", http.StatusInternalServerError)
@@ -350,6 +370,7 @@ func (a *app) loginGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Jika user cancel/deny di Google, kembali ke login lokal SSO.
 	if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
@@ -368,18 +389,21 @@ func (a *app) loginGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validasi state callback terhadap state yang disimpan.
 	flowClaims, err := a.parseOAuthFlowToken(flowCookie.Value)
 	if err != nil || flowClaims.OAuthState != state {
 		http.Error(w, "oauth state tidak valid", http.StatusUnauthorized)
 		return
 	}
 
+	// Tukar auth code Google menjadi access token Google.
 	token, err := a.googleOAuthConfig.Exchange(r.Context(), code)
 	if err != nil {
 		http.Error(w, "gagal menukar google auth code", http.StatusUnauthorized)
 		return
 	}
 
+	// Ambil profil user dari Google userinfo endpoint.
 	googleProfile, err := a.fetchGoogleUserInfo(r.Context(), token.AccessToken)
 	if err != nil {
 		http.Error(w, "gagal mengambil profil google", http.StatusUnauthorized)
@@ -396,6 +420,7 @@ func (a *app) loginGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sinkronisasi user ke tabel sso_users.
 	user, err := a.findOrCreateGoogleUser(r.Context(), googleProfile)
 	if err != nil {
 		http.Error(w, "gagal menyiapkan user sso", http.StatusInternalServerError)
@@ -427,6 +452,8 @@ func (a *app) loginGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 
+	// Jika callback berasal dari flow OAuth app,
+	// lanjutkan ke /authorize agar app mendapat authorization code.
 	if flowClaims.ClientID != "" && flowClaims.RedirectURI != "" {
 		q := url.Values{}
 		q.Set("client_id", flowClaims.ClientID)
@@ -453,6 +480,7 @@ func (a *app) loginPost(w http.ResponseWriter, r *http.Request) {
 	redirectURI := r.FormValue("redirect_uri")
 	state := r.FormValue("state")
 
+	// Verifikasi kredensial email/password di database SSO.
 	user, err := a.findUserByEmail(r.Context(), email)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
 		a.renderLogin(w, r, "Email atau password salah")
@@ -474,6 +502,7 @@ func (a *app) loginPost(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Now().Add(8 * time.Hour),
 	})
 
+	// Jika login dipanggil dalam flow OAuth app, lanjutkan ke authorize.
 	if clientID != "" && redirectURI != "" {
 		q := url.Values{}
 		q.Set("client_id", clientID)
@@ -499,6 +528,7 @@ func (a *app) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Service hanya mendukung grant_type authorization_code.
 	if r.FormValue("grant_type") != "authorization_code" {
 		http.Error(w, "unsupported grant_type", http.StatusBadRequest)
 		return
@@ -513,6 +543,7 @@ func (a *app) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validasi kredensial client OAuth.
 	client, err := a.findClient(r.Context(), clientID)
 	if err != nil || client.ClientSecret != clientSecret {
 		http.Error(w, "invalid client", http.StatusUnauthorized)
@@ -542,6 +573,8 @@ func (a *app) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pastikan auth code belum dipakai, belum kadaluarsa,
+	// dan terikat ke client serta redirect URI yang sama.
 	if usedAt.Valid || expiresAt.Before(time.Now()) || dbClientID != clientID || dbRedirectURI != redirectURI {
 		http.Error(w, "invalid code", http.StatusUnauthorized)
 		return
@@ -567,6 +600,7 @@ func (a *app) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Buat access token JWT untuk dipakai ke endpoint /userinfo.
 	accessToken, err := a.makeAccessToken(user, clientID)
 	if err != nil {
 		http.Error(w, "unable to sign token", http.StatusInternalServerError)
@@ -587,6 +621,7 @@ func (a *app) userinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Terima bearer token dari Authorization header.
 	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
 	if token == "" {
 		http.Error(w, "missing bearer token", http.StatusUnauthorized)
@@ -609,6 +644,7 @@ func (a *app) userinfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) logout(w http.ResponseWriter, r *http.Request) {
+	// Hapus cookie session SSO lalu redirect ke halaman tujuan.
 	next := r.URL.Query().Get("redirect")
 	http.SetCookie(w, &http.Cookie{
 		Name:     a.sessionCookie,
@@ -626,6 +662,7 @@ func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) currentUser(r *http.Request) (ssoUser, error) {
+	// Ambil user login dari cookie session JWT.
 	cookie, err := r.Cookie(a.sessionCookie)
 	if err != nil {
 		return ssoUser{}, err
@@ -666,6 +703,8 @@ func (a *app) findClient(ctx context.Context, clientID string) (ssoClient, error
 	return client, err
 }
 
+// redirectAllowed memeriksa apakah redirect URI ada di daftar whitelist client.
+// Mendukung format JSON array, newline-separated, atau comma-separated.
 func redirectAllowed(allowedRaw, redirectURI string) bool {
 	allowedRaw = strings.TrimSpace(allowedRaw)
 	if allowedRaw == "" {
@@ -694,6 +733,7 @@ func redirectAllowed(allowedRaw, redirectURI string) bool {
 	return false
 }
 
+// makeSessionToken membuat JWT untuk cookie session login SSO.
 func (a *app) makeSessionToken(user ssoUser) (string, error) {
 	c := claims{
 		UserID: user.ID,
@@ -709,6 +749,7 @@ func (a *app) makeSessionToken(user ssoUser) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString(a.jwtSecret)
 }
 
+// makeAccessToken membuat JWT access token untuk OAuth client.
 func (a *app) makeAccessToken(user ssoUser, audience string) (string, error) {
 	c := claims{
 		UserID: user.ID,
@@ -725,6 +766,7 @@ func (a *app) makeAccessToken(user ssoUser, audience string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString(a.jwtSecret)
 }
 
+// parseToken memvalidasi signature JWT dan mengembalikan claims.
 func (a *app) parseToken(token string) (claims, error) {
 	parsed, err := jwt.ParseWithClaims(token, &claims{}, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -742,6 +784,7 @@ func (a *app) parseToken(token string) (claims, error) {
 	return *c, nil
 }
 
+// makeOAuthFlowToken menyimpan konteks flow Google OAuth dalam JWT sementara.
 func (a *app) makeOAuthFlowToken(clientID, redirectURI, appState, oauthState string) (string, error) {
 	flowClaims := oauthFlowClaims{
 		ClientID:    clientID,
@@ -758,6 +801,7 @@ func (a *app) makeOAuthFlowToken(clientID, redirectURI, appState, oauthState str
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, flowClaims).SignedString(a.jwtSecret)
 }
 
+// parseOAuthFlowToken memvalidasi JWT konteks flow OAuth.
 func (a *app) parseOAuthFlowToken(token string) (oauthFlowClaims, error) {
 	parsed, err := jwt.ParseWithClaims(token, &oauthFlowClaims{}, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -777,6 +821,7 @@ func (a *app) parseOAuthFlowToken(token string) (oauthFlowClaims, error) {
 	return *flow, nil
 }
 
+// fetchGoogleUserInfo mengambil profil user dari Google OpenID endpoint.
 func (a *app) fetchGoogleUserInfo(ctx context.Context, accessToken string) (googleUserInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://openidconnect.googleapis.com/v1/userinfo", nil)
 	if err != nil {
@@ -805,6 +850,7 @@ func (a *app) fetchGoogleUserInfo(ctx context.Context, accessToken string) (goog
 	return profile, nil
 }
 
+// isAllowedGoogleDomain membatasi login Google ke domain kampus.
 func (a *app) isAllowedGoogleDomain(email, hostedDomain string) bool {
 	allowed := strings.TrimSpace(strings.ToLower(a.googleHostedDomain))
 	if allowed == "" {
@@ -823,6 +869,8 @@ func (a *app) isAllowedGoogleDomain(email, hostedDomain string) bool {
 	return strings.ToLower(parts[1]) == allowed
 }
 
+// findOrCreateGoogleUser mencari user existing berdasarkan email,
+// atau membuat akun baru dengan role default "user".
 func (a *app) findOrCreateGoogleUser(ctx context.Context, profile googleUserInfo) (ssoUser, error) {
 	user, err := a.findUserByEmail(ctx, profile.Email)
 	if err == nil {
@@ -858,6 +906,7 @@ func (a *app) findOrCreateGoogleUser(ctx context.Context, profile googleUserInfo
 	return a.findUserByEmail(ctx, profile.Email)
 }
 
+// ensureSchema memastikan tabel inti SSO tersedia.
 func ensureSchema(db *sql.DB) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS sso_users (
@@ -902,6 +951,7 @@ func ensureSchema(db *sql.DB) error {
 	return nil
 }
 
+// ensureAdminUser membuat akun admin awal dari env bila belum ada.
 func ensureAdminUser(db *sql.DB) error {
 	email := strings.TrimSpace(strings.ToLower(os.Getenv("SSO_ADMIN_EMAIL")))
 	password := os.Getenv("SSO_ADMIN_PASSWORD")
@@ -929,6 +979,7 @@ func ensureAdminUser(db *sql.DB) error {
 	return err
 }
 
+// randomToken menghasilkan token acak URL-safe.
 func randomToken(size int) (string, error) {
 	b := make([]byte, size)
 	if _, err := rand.Read(b); err != nil {
@@ -937,6 +988,7 @@ func randomToken(size int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// env membaca environment variable dengan fallback.
 func env(key, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -945,6 +997,7 @@ func env(key, fallback string) string {
 	return value
 }
 
+// minutesEnv membaca env integer menit dan mengembalikan duration.
 func minutesEnv(key string, fallback int) time.Duration {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -957,6 +1010,7 @@ func minutesEnv(key string, fallback int) time.Duration {
 	return time.Duration(minutes) * time.Minute
 }
 
+// withCORS menambahkan header CORS dasar untuk integrasi antar aplikasi.
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -970,6 +1024,8 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
+// loadDotEnv membaca file .env sederhana untuk local development.
+// Nilai env yang sudah ada tidak akan ditimpa.
 func loadDotEnv(path string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
