@@ -7,10 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -24,13 +22,13 @@ import (
 )
 
 type app struct {
-	db            *sql.DB
-	jwtSecret     []byte
-	sessionCookie string
-	oauthFlowCookie string
-	codeTTL       time.Duration
-	tokenTTL      time.Duration
-	googleOAuthConfig *oauth2.Config
+	db                 *sql.DB
+	jwtSecret          []byte
+	sessionCookie      string
+	oauthFlowCookie    string
+	codeTTL            time.Duration
+	tokenTTL           time.Duration
+	googleOAuthConfig  *oauth2.Config
 	googleHostedDomain string
 }
 
@@ -59,10 +57,10 @@ type ssoClient struct {
 }
 
 type oauthFlowClaims struct {
-	ClientID       string `json:"client_id"`
-	RedirectURI    string `json:"redirect_uri"`
-	AppState       string `json:"app_state"`
-	OAuthState     string `json:"oauth_state"`
+	ClientID    string `json:"client_id"`
+	RedirectURI string `json:"redirect_uri"`
+	AppState    string `json:"app_state"`
+	OAuthState  string `json:"oauth_state"`
 	jwt.RegisteredClaims
 }
 
@@ -72,50 +70,6 @@ type googleUserInfo struct {
 	HostedDomain  string `json:"hd"`
 	Name          string `json:"name"`
 }
-
-// Template HTML login sederhana untuk alur auth code.
-const loginTemplate = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>SSO Login</title>
-  <style>
-    body { font-family: Arial, sans-serif; background: #f6f7fb; }
-    .card { width: 420px; margin: 64px auto; background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,.08); }
-    h1 { margin-top: 0; font-size: 20px; }
-    .muted { color: #666; font-size: 14px; margin-bottom: 16px; }
-    label { display:block; font-size:14px; margin: 10px 0 6px; }
-    input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
-    button { margin-top: 16px; width: 100%; padding: 11px; border: 0; border-radius: 8px; background: #2563eb; color:#fff; font-weight: bold; cursor: pointer; }
-		.btn-google { display:block; margin-top: 12px; width: 100%; padding: 11px; border-radius: 8px; border: 1px solid #ddd; text-align: center; text-decoration: none; color: #111827; font-weight: 600; }
-    .err { margin-top: 10px; color: #b91c1c; font-size: 14px; }
-    .client { background:#f3f4f6; padding: 8px 10px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Central SSO Login</h1>
-    <div class="muted">Masuk sekali untuk semua aplikasi.</div>
-    {{if .ClientName}}<div class="client">Aplikasi: <strong>{{.ClientName}}</strong></div>{{end}}
-    <form method="post" action="/login">
-      <input type="hidden" name="client_id" value="{{.ClientID}}" />
-      <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}" />
-      <input type="hidden" name="state" value="{{.State}}" />
-
-      <label>Email</label>
-      <input type="email" name="email" required />
-
-      <label>Password</label>
-      <input type="password" name="password" required />
-
-      <button type="submit">Login</button>
-			<a class="btn-google" href="/login/google?client_id={{.ClientID}}&redirect_uri={{.RedirectURI}}&state={{.State}}">Login dengan Google (@{{.AllowedDomain}})</a>
-      {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-    </form>
-  </div>
-</body>
-</html>`
 
 // main menginisialisasi dependency aplikasi, mendaftarkan route,
 // lalu menjalankan HTTP server SSO.
@@ -153,12 +107,12 @@ func main() {
 	}
 
 	a := &app{
-		db:               db,
-		jwtSecret:        []byte(secret),
-		sessionCookie:    sessionCookie,
-		oauthFlowCookie:  oauthFlowCookie,
-		codeTTL:          codeTTL,
-		tokenTTL:         tokenTTL,
+		db:                 db,
+		jwtSecret:          []byte(secret),
+		sessionCookie:      sessionCookie,
+		oauthFlowCookie:    oauthFlowCookie,
+		codeTTL:            codeTTL,
+		tokenTTL:           tokenTTL,
 		googleHostedDomain: googleHostedDomain,
 		googleOAuthConfig: &oauth2.Config{
 			ClientID:     googleClientID,
@@ -190,475 +144,6 @@ func main() {
 func (a *app) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// authorize menjalankan OAuth authorization endpoint.
-// Jika user belum login, user dialihkan ke /login.
-// Jika user sudah login, service menerbitkan authorization code lalu redirect kembali ke client.
-func (a *app) authorize(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	clientID := r.URL.Query().Get("client_id")
-	redirectURI := r.URL.Query().Get("redirect_uri")
-	state := r.URL.Query().Get("state")
-	if clientID == "" || redirectURI == "" {
-		http.Error(w, "client_id and redirect_uri are required", http.StatusBadRequest)
-		return
-	}
-
-	// Validasi client OAuth dan redirect URI yang diizinkan.
-	client, err := a.findClient(r.Context(), clientID)
-	if err != nil {
-		http.Error(w, "unknown client", http.StatusUnauthorized)
-		return
-	}
-	if !redirectAllowed(client.RedirectURIs, redirectURI) {
-		http.Error(w, "redirect_uri is not registered", http.StatusUnauthorized)
-		return
-	}
-
-	// Cek sesi user pada cookie JWT internal.
-	user, err := a.currentUser(r)
-	if err != nil {
-		q := url.Values{}
-		q.Set("client_id", clientID)
-		q.Set("redirect_uri", redirectURI)
-		q.Set("state", state)
-		http.Redirect(w, r, "/login?"+q.Encode(), http.StatusFound)
-		return
-	}
-
-	// Terbitkan auth code sekali pakai.
-	code, err := randomToken(48)
-	if err != nil {
-		http.Error(w, "unable to generate auth code", http.StatusInternalServerError)
-		return
-	}
-
-	expiresAt := time.Now().Add(a.codeTTL)
-	_, err = a.db.ExecContext(r.Context(), `
-		INSERT INTO sso_auth_codes (code, user_id, client_id, redirect_uri, expires_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, code, user.ID, clientID, redirectURI, expiresAt)
-	if err != nil {
-		http.Error(w, "unable to issue auth code", http.StatusInternalServerError)
-		return
-	}
-
-	// Sisipkan code dan state ke URL callback client.
-	redir, err := url.Parse(redirectURI)
-	if err != nil {
-		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
-		return
-	}
-	params := redir.Query()
-	params.Set("code", code)
-	if state != "" {
-		params.Set("state", state)
-	}
-	redir.RawQuery = params.Encode()
-	http.Redirect(w, r, redir.String(), http.StatusFound)
-}
-
-func (a *app) login(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		a.renderLogin(w, r, "")
-	case http.MethodPost:
-		a.loginPost(w, r)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// renderLogin merender halaman login dengan konteks client OAuth.
-func (a *app) renderLogin(w http.ResponseWriter, r *http.Request, errMsg string) {
-	clientID := r.URL.Query().Get("client_id")
-	redirectURI := r.URL.Query().Get("redirect_uri")
-	state := r.URL.Query().Get("state")
-	clientName := ""
-	if clientID != "" {
-		if client, err := a.findClient(r.Context(), clientID); err == nil {
-			clientName = client.Name
-		}
-	}
-
-	tpl := template.Must(template.New("login").Parse(loginTemplate))
-	_ = tpl.Execute(w, map[string]string{
-		"ClientID":    clientID,
-		"ClientName":  clientName,
-		"RedirectURI": redirectURI,
-		"State":       state,
-		"Error":       errMsg,
-		"AllowedDomain": a.googleHostedDomain,
-	})
-}
-
-func (a *app) loginGoogle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Fitur Google OAuth bersifat opsional; pastikan sudah dikonfigurasi.
-	if a.googleOAuthConfig == nil || a.googleOAuthConfig.ClientID == "" || a.googleOAuthConfig.ClientSecret == "" {
-		http.Error(w, "google oauth belum dikonfigurasi", http.StatusInternalServerError)
-		return
-	}
-
-	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
-	redirectURI := strings.TrimSpace(r.URL.Query().Get("redirect_uri"))
-	appState := strings.TrimSpace(r.URL.Query().Get("state"))
-
-	// Jika login Google dipicu dari flow OAuth app tertentu,
-	// pastikan pasangan client_id & redirect_uri valid.
-	if clientID != "" || redirectURI != "" {
-		if clientID == "" || redirectURI == "" {
-			http.Error(w, "client_id dan redirect_uri wajib berpasangan", http.StatusBadRequest)
-			return
-		}
-
-		client, err := a.findClient(r.Context(), clientID)
-		if err != nil {
-			http.Error(w, "unknown client", http.StatusUnauthorized)
-			return
-		}
-		if !redirectAllowed(client.RedirectURIs, redirectURI) {
-			http.Error(w, "redirect_uri is not registered", http.StatusUnauthorized)
-			return
-		}
-	}
-
-	// State khusus Google OAuth untuk mencegah CSRF.
-	oauthState, err := randomToken(32)
-	if err != nil {
-		http.Error(w, "unable to prepare oauth state", http.StatusInternalServerError)
-		return
-	}
-
-	// Simpan context flow ke cookie JWT agar callback Google bisa melanjutkan
-	// ke flow authorize milik aplikasi asal.
-	flowToken, err := a.makeOAuthFlowToken(clientID, redirectURI, appState, oauthState)
-	if err != nil {
-		http.Error(w, "unable to sign oauth state", http.StatusInternalServerError)
-		return
-	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     a.oauthFlowCookie,
-		Value:    flowToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(10 * time.Minute),
-	})
-
-	http.Redirect(w, r, a.googleOAuthConfig.AuthCodeURL(oauthState), http.StatusFound)
-}
-
-func (a *app) loginGoogleCallback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if a.googleOAuthConfig == nil || a.googleOAuthConfig.ClientID == "" || a.googleOAuthConfig.ClientSecret == "" {
-		http.Error(w, "google oauth belum dikonfigurasi", http.StatusInternalServerError)
-		return
-	}
-
-	// Jika user cancel/deny di Google, kembali ke login lokal SSO.
-	if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
-		http.Redirect(w, r, "/login", http.StatusFound)
-		return
-	}
-
-	code := strings.TrimSpace(r.URL.Query().Get("code"))
-	state := strings.TrimSpace(r.URL.Query().Get("state"))
-	if code == "" || state == "" {
-		http.Error(w, "invalid oauth callback", http.StatusBadRequest)
-		return
-	}
-
-	flowCookie, err := r.Cookie(a.oauthFlowCookie)
-	if err != nil {
-		http.Error(w, "oauth state cookie tidak ditemukan", http.StatusUnauthorized)
-		return
-	}
-
-	// Validasi state callback terhadap state yang disimpan.
-	flowClaims, err := a.parseOAuthFlowToken(flowCookie.Value)
-	if err != nil || flowClaims.OAuthState != state {
-		http.Error(w, "oauth state tidak valid", http.StatusUnauthorized)
-		return
-	}
-
-	// Tukar auth code Google menjadi access token Google.
-	token, err := a.googleOAuthConfig.Exchange(r.Context(), code)
-	if err != nil {
-		http.Error(w, "gagal menukar google auth code", http.StatusUnauthorized)
-		return
-	}
-
-	// Ambil profil user dari Google userinfo endpoint.
-	googleProfile, err := a.fetchGoogleUserInfo(r.Context(), token.AccessToken)
-	if err != nil {
-		http.Error(w, "gagal mengambil profil google", http.StatusUnauthorized)
-		return
-	}
-
-	if !googleProfile.EmailVerified {
-		http.Error(w, "email google belum terverifikasi", http.StatusUnauthorized)
-		return
-	}
-
-	if !a.isAllowedGoogleDomain(googleProfile.Email, googleProfile.HostedDomain) {
-		http.Error(w, "hanya email domain pnc.ac.id yang diizinkan", http.StatusForbidden)
-		return
-	}
-
-	// Sinkronisasi user ke tabel sso_users.
-	user, err := a.findOrCreateGoogleUser(r.Context(), googleProfile)
-	if err != nil {
-		http.Error(w, "gagal menyiapkan user sso", http.StatusInternalServerError)
-		return
-	}
-
-	sessionToken, err := a.makeSessionToken(user)
-	if err != nil {
-		http.Error(w, "gagal membuat sesi login", http.StatusInternalServerError)
-		return
-	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     a.sessionCookie,
-		Value:    sessionToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(8 * time.Hour),
-	})
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     a.oauthFlowCookie,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-	})
-
-	// Jika callback berasal dari flow OAuth app,
-	// lanjutkan ke /authorize agar app mendapat authorization code.
-	if flowClaims.ClientID != "" && flowClaims.RedirectURI != "" {
-		q := url.Values{}
-		q.Set("client_id", flowClaims.ClientID)
-		q.Set("redirect_uri", flowClaims.RedirectURI)
-		if flowClaims.AppState != "" {
-			q.Set("state", flowClaims.AppState)
-		}
-		http.Redirect(w, r, "/authorize?"+q.Encode(), http.StatusFound)
-		return
-	}
-
-	http.Redirect(w, r, "/health", http.StatusFound)
-}
-
-func (a *app) loginPost(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return
-	}
-
-	email := strings.TrimSpace(strings.ToLower(r.FormValue("email")))
-	password := r.FormValue("password")
-	clientID := r.FormValue("client_id")
-	redirectURI := r.FormValue("redirect_uri")
-	state := r.FormValue("state")
-
-	// Verifikasi kredensial email/password di database SSO.
-	user, err := a.findUserByEmail(r.Context(), email)
-	if err != nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
-		a.renderLogin(w, r, "Email atau password salah")
-		return
-	}
-
-	token, err := a.makeSessionToken(user)
-	if err != nil {
-		http.Error(w, "unable to create session", http.StatusInternalServerError)
-		return
-	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     a.sessionCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(8 * time.Hour),
-	})
-
-	// Jika login dipanggil dalam flow OAuth app, lanjutkan ke authorize.
-	if clientID != "" && redirectURI != "" {
-		q := url.Values{}
-		q.Set("client_id", clientID)
-		q.Set("redirect_uri", redirectURI)
-		if state != "" {
-			q.Set("state", state)
-		}
-		http.Redirect(w, r, "/authorize?"+q.Encode(), http.StatusFound)
-		return
-	}
-
-	http.Redirect(w, r, "/health", http.StatusFound)
-}
-
-func (a *app) token(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return
-	}
-
-	// Service hanya mendukung grant_type authorization_code.
-	if r.FormValue("grant_type") != "authorization_code" {
-		http.Error(w, "unsupported grant_type", http.StatusBadRequest)
-		return
-	}
-
-	code := r.FormValue("code")
-	clientID := r.FormValue("client_id")
-	clientSecret := r.FormValue("client_secret")
-	redirectURI := r.FormValue("redirect_uri")
-	if code == "" || clientID == "" || clientSecret == "" || redirectURI == "" {
-		http.Error(w, "missing required fields", http.StatusBadRequest)
-		return
-	}
-
-	// Validasi kredensial client OAuth.
-	client, err := a.findClient(r.Context(), clientID)
-	if err != nil || client.ClientSecret != clientSecret {
-		http.Error(w, "invalid client", http.StatusUnauthorized)
-		return
-	}
-
-	tx, err := a.db.BeginTx(r.Context(), nil)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback()
-
-	var userID int64
-	var dbClientID string
-	var dbRedirectURI string
-	var expiresAt time.Time
-	var usedAt sql.NullTime
-	err = tx.QueryRowContext(r.Context(), `
-		SELECT user_id, client_id, redirect_uri, expires_at, used_at
-		FROM sso_auth_codes
-		WHERE code = ?
-		FOR UPDATE
-	`, code).Scan(&userID, &dbClientID, &dbRedirectURI, &expiresAt, &usedAt)
-	if err != nil {
-		http.Error(w, "invalid code", http.StatusUnauthorized)
-		return
-	}
-
-	// Pastikan auth code belum dipakai, belum kadaluarsa,
-	// dan terikat ke client serta redirect URI yang sama.
-	if usedAt.Valid || expiresAt.Before(time.Now()) || dbClientID != clientID || dbRedirectURI != redirectURI {
-		http.Error(w, "invalid code", http.StatusUnauthorized)
-		return
-	}
-
-	// Mark code as used
-	_, err = tx.ExecContext(r.Context(), "UPDATE sso_auth_codes SET used_at = ? WHERE code = ?", time.Now(), code)
-	if err != nil {
-		http.Error(w, "unable to consume code", http.StatusInternalServerError)
-		return
-	}
-
-	var user ssoUser
-	err = tx.QueryRowContext(r.Context(), "SELECT id, name, email, role FROM sso_users WHERE id = ?", userID).
-		Scan(&user.ID, &user.Name, &user.Email, &user.Role)
-	if err != nil {
-		http.Error(w, "invalid user", http.StatusUnauthorized)
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Buat access token JWT untuk dipakai ke endpoint /userinfo.
-	accessToken, err := a.makeAccessToken(user, clientID)
-	if err != nil {
-		http.Error(w, "unable to sign token", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"token_type":   "Bearer",
-		"access_token": accessToken,
-		"expires_in":   int(a.tokenTTL.Seconds()),
-	})
-}
-
-func (a *app) userinfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Terima bearer token dari Authorization header.
-	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
-	if token == "" {
-		http.Error(w, "missing bearer token", http.StatusUnauthorized)
-		return
-	}
-
-	parsedClaims, err := a.parseToken(token)
-	if err != nil {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":    parsedClaims.UserID,
-		"name":  parsedClaims.Name,
-		"email": parsedClaims.Email,
-		"role":  parsedClaims.Role,
-	})
-}
-
-func (a *app) logout(w http.ResponseWriter, r *http.Request) {
-	// Hapus cookie session SSO lalu redirect ke halaman tujuan.
-	next := r.URL.Query().Get("redirect")
-	http.SetCookie(w, &http.Cookie{
-		Name:     a.sessionCookie,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-	})
-	if next == "" {
-		next = "/login"
-	}
-	http.Redirect(w, r, next, http.StatusFound)
 }
 
 func (a *app) currentUser(r *http.Request) (ssoUser, error) {
