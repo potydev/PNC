@@ -547,6 +547,7 @@ func (a *app) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mark code as used
 	_, err = tx.ExecContext(r.Context(), "UPDATE sso_auth_codes SET used_at = ? WHERE code = ?", time.Now(), code)
 	if err != nil {
 		http.Error(w, "unable to consume code", http.StatusInternalServerError)
